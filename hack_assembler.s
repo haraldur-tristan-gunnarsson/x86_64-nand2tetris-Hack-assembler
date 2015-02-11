@@ -34,9 +34,7 @@
 	.equiv PROT_WRITE, 0x2
 	.equiv PROT_EXEC, 0x4
 .equiv SYS_EXIT, 60
-	#/usr/include/stdlib.h:
-	.equiv EXIT_SUCCESS, 0
-	.equiv EXIT_FAILURE, 1
+	.equiv EXIT_SUCCESS, 0#/usr/include/stdlib.h:
 
 .equiv ST_FD_OUT, -16#Output file descriptor location.
 .equiv ST_FD_IN, -8#Input file descriptor location.
@@ -89,6 +87,9 @@ preset_symbols:#Populate the symbol table initially with these preset symbols:
 .lcomm INPUT_BUFFER, INPUT_BUFFER_SIZE#Reserve INPUT_BUFFER_SIZE bytes for "local common" denoted INPUT_BUFFER.
 
 .section .text
+#IMPORTANT NOTE: The following registers are considered "global" -- not to be thoughtlessly tampered with anywhere, but in the 'main'/_start procedure: %rsp(excepting calls and rets), %rbp, %r8, %r12, %r13, %r14, %r15.
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 add_symbol:
 #Adds a new symbol to the symbol table and updates the %r14 register with the new address of the start of the symbol table.
@@ -119,7 +120,7 @@ label_symbols:
 
 a_instr:#Converts number after @ from an ASCII string to a binary number (or converts a non-number after to a binary number by finding the matching string in the symbol table and getting the symbol value), and then into an ASCII representation of that binary number! Then writes it to the file.
 #Accepts: %r8 representing line length, ST_FD_OUT(%rbp) is the file descriptor, %r14 is the start of the symbol table, %r13 is the end of the symbol table, %r12 is the number of currently existing variable symbols
-#Modifies: %rax, %rbx, %rcx, %rdx, %rdi, %rsi, %r8, %r9, %r10, %r11, %r12, %r14.
+#Modifies: %rax, %rbx, %rcx, %rdx, %rdi, %rsi, %r9, %r10, %r11, %r12, %r14.
 #Intended "returns": %r14.
 	movb $'0, output#leftmost/most-significant 'bit' should be '0' to indicate an instruction that sets the A register in the Hack machine.
 	cmpb $'0, (INPUT_BUFFER + 1)#Is the first character after '@' a non-numeral? If so, try to find a pre-existing symbol that matches or, if that fails, add a new symbol using the whole string...
@@ -225,7 +226,7 @@ effect_label\@:#\@ is a count of the invokations of the macro, making a unique l
 
 c_instr:#Spaghetti code? Must determine which sub-instructions exist based on the presence or absence of = and ; characters. Then generate binary ASCII representation of each sub-instruction, including nulls. Then write to file.
 #Accepts: %r8 representing line length, ST_FD_OUT(%rbp) is the file descriptor
-#Modifies: %rax, %rbx, %rcx, %rdx, %rdi, %r8, %r9, %r10
+#Modifies: %rax, %rbx, %rcx, %rdx, %rdi, %rsi, %r9, %r10
 #Intended "returns": none.
 #0	1	2	3	4	5	6	7	8	9	10	11	12	13	14	15
 #15	14	13	12	11	10	9	8	7	6	5	4	3	2	1	0
@@ -245,14 +246,15 @@ c_instr:#Spaghetti code? Must determine which sub-instructions exist based on th
 	.equiv JE_BIT,		output + 14#j2	#...or equal...
 	.equiv JG_BIT,		output + 15#j3	#...or greater.
 	movq $INPUT_BUFFER, %r9#initial start-point
-	addq %r9, %r8
+	movq $INPUT_BUFFER, %rsi
+	addq %r8, %rsi#initial end-point
 	movq $output, %rdi
 	movq $(OUTPUT_LENGTH - 1), %rcx
 	movb $'1, %al
 	cld#Ensure forward direction (incrementing %rdi) for all reps in this procedure (including those in macroes).
 	rep stosb#Set all the characters in output(%rdi) to '1', using %rcx(counter) and %al(value)
 	movq %r9, %rbx
-	movq %r8, %rdx
+	movq %rsi, %rdx
 	FIND_CHAR $'=#First determine whether there are any destinations.
 	je dest
 	movb $'0, A_DEST_BIT#If no '=', then null the destination bits
@@ -285,7 +287,7 @@ find_jump:#All jumps begin with 'J', so no need to worry about the semi-colon
 #JNE	1	0	1
 #JLE	1	1	0
 #JMP	1	1	1
-	movq %r8, %rdx#Necessary if there was a destination.
+	movq %rsi, %rdx#Necessary if there was a destination.
 	FIND_CHAR $'J
 	je jump
 	movb $'0, JL_BIT#If no 'J', then null the jump bits
@@ -293,9 +295,9 @@ find_jump:#All jumps begin with 'J', so no need to worry about the semi-colon
 	movb $'0, JG_BIT
 	jmp comp#No 'J', so no jump possible
 jump:
-	movq %rdi, %r8#comp part should not search after 'J'
-	movq %r8, %rbx#Search only after the 'J' found that indicates a jump
-	subq $2, %r8#comp part should not search after the ';'.
+	movq %rdi, %rsi#comp part should not search after 'J'
+	movq %rsi, %rbx#Search only after the 'J' found that indicates a jump
+	subq $2, %rsi#comp part should not search after the ';'.
 	FIND_CHAR $'M
 	je comp#If there IS an 'M' after the 'J', it can only be a 'JMP', so nothing should be done
 	FIND_CHAR $'N
@@ -330,7 +332,7 @@ comp:#Almost the entire rest of this procedure deals with the computation/ALU bi
 #*a determines whether x is A or M.
 #** f determines whether the output uses x+y (when '1') or x&y (when '0').
 	movq %r9, %rbx#Necessary if there was a destination or jump.
-	movq %r8, %rdx#Necessary if there was a jump.
+	movq %rsi, %rdx#Necessary if there was a jump.
 	FIND_CHAR $'0
 	jne no_zero
 	movb $'0, A_BIT
@@ -347,7 +349,7 @@ no_M:
 	RECORD_PRESENCE_OF_CHAR $'A, ZY_BIT#Unless either 'A' or 'M' exist, zy-bit is set
 yes_M:
 	RECORD_PRESENCE_OF_CHAR $'D, ZX_BIT#Unless 'D' exists, zx-bit is set
-	movq %r8, %r10
+	movq %rsi, %r10
 	subq %r9, %r10#This gives the length of the comp section, should be 1-3 characters
 	cmpq $2, %r10
 	je two_character_comp
@@ -448,9 +450,8 @@ filename_copy:#Stores filename in preset_symbols area, so there is a limit to th
 	movb %al, preset_symbols(%rcx)
 	incq %rcx
 	cmpb $0, %al#Let us not try to copy all memory.
-	je filename_error_exit
-	cmpb $'., %al#Assume that there is only one '.', that before the file extension. Cannot accept input files of the form ./foo or ../foo or ../../foo and so on.
 	jne filename_copy#Is there really no way to do this with x86_64 string operations, repne movsb?
+	subq $4, %rcx
 	movb $'h,  (preset_symbols + 0)(%rcx)#Now change the extension from .asm to .hack:
 	movb $'a,  (preset_symbols + 1)(%rcx)#...
 	movb $'c,  (preset_symbols + 2)(%rcx)#...
@@ -471,6 +472,7 @@ read_loop_init:
 	xorq %r15, %r15#Reserved for seeking within the input file. Use for nothing else until end.
 	xorq %r12, %r12#Clear for use as line count for labels in 1st loop, variable count in 2nd.
 read_loop_begin:#Read every line in the input file and process differently depending on the content.
+#NOTE: Within this loop is the only safe place to modify %r8.
 	movq $SYS_LSEEK, %rax
 	movq ST_FD_IN(%rbp), %rdi
 	movq %r15, %rsi
@@ -524,30 +526,28 @@ find_non_command:#Determine the point at which the command 'ends' and store it i
 	incq %r8
 	cmpq $INPUT_BUFFER_SIZE, %r8
 	jge end_read_loop#Maximum line-size is $INPUT_BUFFER_SIZE
-	SKIP_WHITESPACE INPUT_BUFFER(%r8), found_non_command
-	CMP_JE $'/, INPUT_BUFFER(%r8), found_non_command#Is it ever possible to have a non-comment line that starts with '/'?
+	SKIP_WHITESPACE INPUT_BUFFER(%r8), pass_decision
+	CMP_JE $'/, INPUT_BUFFER(%r8), pass_decision#Is it ever possible to have a non-comment line that starts with '/'?
 	jmp find_non_command
-found_non_command:
-	addq %r8, %r15
 pass_decision:
 	jmp first_pass_loop#This is modified. <<<<<<<<<<<----
 
 second_pass_loop:
-	CMP_JE $'(, INPUT_BUFFER, read_loop_begin#Ignore labels after first pass
+	CMP_JE $'(, INPUT_BUFFER, find_command#Ignore labels after first pass
 	CMP_JE $'@, INPUT_BUFFER, call_a_instr
 	call c_instr#At this point, everything else should be a c-instruction, assuming correct input (as nand2tetris suggests).
-	jmp read_loop_begin
+	jmp find_command
 call_a_instr:
 	call a_instr
-	jmp read_loop_begin
+	jmp find_command
 
 first_pass_loop:#Add all labels in the Hack assembly file to the symbol table.
 	incq %r12#Each non-label line has a line address, and so is potentially addressable by a label.
 	cmpb $'(, INPUT_BUFFER
-	jne read_loop_begin
+	jne find_command
 	decq %r12#Increment not if label, as labels don't enter machine code and so aren't addressable
 	call label_symbols
-	jmp read_loop_begin
+	jmp find_command
 
 end_read_loop:
 	jmp end_first_loop#This is modified. <<<<<<<<<<<----
@@ -559,11 +559,6 @@ end_read_loop:
 	syscall#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
 	movq $SYS_EXIT, %rax
 	movq $EXIT_SUCCESS, %rdi
-	syscall#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
-
-filename_error_exit:
-	movq $SYS_EXIT, %rax
-	movq $EXIT_FAILURE, %rdi
 	syscall#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
 
 end_first_loop:#Self-modifying code that depends on the page size being 4096 (0x1000) bytes.
@@ -588,5 +583,5 @@ end_first_loop:#Self-modifying code that depends on the page size being 4096 (0x
 	movq $end_read_loop, %rdi#Again, just in case this is on a different page.
 	andq $page_rounder, %rdi#Round to page boundary.
 	syscall#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
-	movw $0x9090, end_read_loop#Replace jump to this position with two NOPs. Should be 8-bit relative jump like: eb 3a. Changed to: 90 90
+	movw $0x9090, end_read_loop#Replace jump to this position with two NOPs. Should be 8-bit relative jump like: eb 2a. Changed to: 90 90
 	jmp read_loop_init

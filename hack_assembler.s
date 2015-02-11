@@ -8,7 +8,7 @@
 
 #This program successfully assembles the source files provided here: http://www.nand2tetris.org/06.php. It implements an assembler for the Hack platform. Output from this program can be compared with output from the programs in the link.
 
-#NOTE: This is my first and (as of typing) only assembly-language program, for any architecture. At first I knew very little, so there are some messy parts from when I first started. There are few validation checks, as the nand2tetris assignments suggest to assume correct input. Additionally, the program cannot correctly handle lines longer than 256 characters (including whitespace and newline etc.) nor more than 0x10000 (non-label, non-blank, non-comment) lines.
+#NOTE: This is my first and (as of typing) only assembly-language program, for any architecture. At first I knew very little, so there are some messy parts from when I first started. There are few validation checks, as the nand2tetris assignments suggest to assume correct input. Additionally, the program cannot correctly handle more than 254 characters of comment (including // and excluding terminating newlines) or command (excluding any whitespace) nor more than 0x8000 (non-label, non-blank, non-comment) lines.
 #Also, the (rather silly, given the probably-non-optimal algorithms in use and lack of a need for escpecially low runtimes) notes about the speeds of certain instructions may not apply to non-Haswell processors. I used http://www.agner.org/optimize/instruction_tables.pdf for reference.
 #Thanks to http://programminggroundup.blogspot.co.uk/ -- an excellent introduction, despite being 32-bit only.
 
@@ -85,7 +85,7 @@ preset_symbols:#Populate the symbol table initially with these preset symbols:
 
 
 .section .bss
-.equiv INPUT_BUFFER_SIZE, 0x100#256 should be more than enough. Why use anything more than 50 characters for a symbol? Besides, symbols can be no longer than (255 - SYMBOL_RECORD_SIZE_SIZE - SYMBOL_RECORD_VALUE_SIZE), which (currently), is 252. This is enough for the line "(252_length_symbol)\r\n", exactly (note that the parentheses are included in the count up to 256|0x100, as, in Hack assembly, strings in parentheses define label symbols), and so is sufficient for Mac OS (which uses \r or CR as a line terminator), Linux (which uses \n or LF, as do (most?) other Unices/likes) or DOS/Windows (which uses \r\n or CRLF). I would expect that input files that did not use any of these three line-ending schemes would be ones made in operating systems I have not heard of.
+.equiv INPUT_BUFFER_SIZE, (1<<(8 * SYMBOL_RECORD_SIZE_SIZE)) - SYMBOL_RECORD_SIZE_SIZE - SYMBOL_RECORD_VALUE_SIZE + 2#INPUT_BUFFER_SIZE should accommodate this input: "(maximum_label_length)\r\|\n\|\t\| ". maximum_label_length = 2^(8 * SYMBOL_RECORD_SIZE_SIZE) - SYMBOL_RECORD_SIZE_SIZE - SYMBOL_RECORD_VALUE_SIZE - 1. Adding 3 accounts for parentheses and whitespace. As of typing, the total is 0xff, i.e. 255. In Hack assembly, parentheses define label symbols.
 .lcomm INPUT_BUFFER, INPUT_BUFFER_SIZE#Reserve INPUT_BUFFER_SIZE bytes for "local common" denoted INPUT_BUFFER.
 
 .section .text
@@ -449,7 +449,7 @@ filename_copy:#Stores filename in preset_symbols area, so there is a limit to th
 	incq %rcx
 	cmpb $0, %al#Let us not try to copy all memory.
 	je filename_error_exit
-	cmpb $'., %al#Assume that there is only one '.', that before the file extension.
+	cmpb $'., %al#Assume that there is only one '.', that before the file extension. Cannot accept input files of the form ./foo or ../foo or ../../foo and so on.
 	jne filename_copy#Is there really no way to do this with x86_64 string operations, repne movsb?
 	movb $'h,  (preset_symbols + 0)(%rcx)#Now change the extension from .asm to .hack:
 	movb $'a,  (preset_symbols + 1)(%rcx)#...
@@ -510,16 +510,13 @@ continue_read_loop:
 
 comment_line:
 	movq $-1, %r8#Integer underflow.
-find_newline:#Find end of the comment line and increase %r15, so that the read loop shall continue AFTER the end of the comment line.
+find_newline:#Find end of the comment line and then return to skipping through whitespace in the find_command loop, above.
 	incq %r8
 	cmpq $INPUT_BUFFER_SIZE, %r8
-	jge end_read_loop#Maximum line-size is $INPUT_BUFFER_SIZE
-	CMP_JE $'\n, INPUT_BUFFER(%r8), found_newline
-	CMP_JE $'\r, INPUT_BUFFER(%r8), found_newline#Damn line-ending incompatibilities!
+	jge end_read_loop#Handling longer comments without confusing the contents for commands would add complication.
+	CMP_JE $'\n, INPUT_BUFFER(%r8), find_command
+	CMP_JE $'\r, INPUT_BUFFER(%r8), find_command#Damn line-ending incompatibilities!
 	jmp find_newline
-found_newline:
-	addq %r8, %r15
-	jmp read_loop_begin
 
 command_line:
 	movq $-1, %r8#Integer underflow.

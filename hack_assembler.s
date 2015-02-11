@@ -6,7 +6,7 @@
 #To assemble and run on a file called "test.asm":
 #as hack_assembler.s -o hack_assembler.o && ld -m elf_x86_64 hack_assembler.o -o hack_assembler.elf && ./hack_assembler.elf test.asm && echo $?
 
-#This program successfully assembles the source files provided here: http://www.nand2tetris.org/06.php. It implements an assembler for the Hack platform. Output from this program can be compared with output from the programs in the link.
+#This program successfully assembles the source files provided here: http://www.nand2tetris.org/06.php. It implements an assembler for the Hack platform. Output from this program can be compared with output from the programs in the link. Note that one should not pass arguments like ./foo, ../foo or ../../foo.
 
 #NOTE: This is my first and (as of typing) only assembly-language program, for any architecture. At first I knew very little, so there are some messy parts from when I first started. There are few validation checks, as the nand2tetris assignments suggest to assume correct input. Additionally, the program cannot correctly handle more than 254 characters of comment (including // and excluding terminating newlines) or command (excluding any whitespace) nor more than 0x8000 (non-label, non-blank, non-comment) lines.
 #Also, the (rather silly, given the probably-non-optimal algorithms in use and lack of a need for escpecially low runtimes) notes about the speeds of certain instructions may not apply to non-Haswell processors. I used http://www.agner.org/optimize/instruction_tables.pdf for reference.

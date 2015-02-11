@@ -528,10 +528,8 @@ find_non_command:#Determine the point at which the command 'ends' and store it i
 	cmpq $INPUT_BUFFER_SIZE, %r8
 	jge end_read_loop#Maximum line-size is $INPUT_BUFFER_SIZE
 	SKIP_WHITESPACE INPUT_BUFFER(%r8), found_non_command
-	CMP_JE $'/, INPUT_BUFFER(%r8), non_initial_comment#Is it ever possible to have a non-comment line that starts with '/'?
+	CMP_JE $'/, INPUT_BUFFER(%r8), found_non_command#Is it ever possible to have a non-comment line that starts with '/'?
 	jmp find_non_command
-non_initial_comment:
-	decq %r15#Pretend there was a newline just before the comment started.
 found_non_command:
 	addq %r8, %r15
 pass_decision:

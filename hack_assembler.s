@@ -6,6 +6,10 @@
 #To assemble and run on a file called "test.asm":
 #as hack_assembler.s -o hack_assembler.o && ld -m elf_x86_64 hack_assembler.o -o hack_assembler.elf && ./hack_assembler.elf test.asm && echo $?
 
+#To compare input and output with input file "test.asm":
+#pr -mt test2.{asm,hack}|sed 's/ //g'|expand|sed 's/ /\./g'
+#Note that labels shall break the alignment, so it is better to test them near the bottom of the "test.asm" file.
+
 #This program successfully assembles the source files provided here: http://www.nand2tetris.org/06.php. It implements an assembler for the Hack platform. Output from this program can be compared with output from the programs in the link. Note that one should not pass arguments like ./foo, ../foo or ../../foo.
 
 #NOTE: This is my first and (as of typing) only assembly-language program, for any architecture. At first I knew very little, so there are some messy parts from when I first started. There are few validation checks, as the nand2tetris assignments suggest to assume correct input. Additionally, the program cannot correctly handle more than 254 characters of comment (including // and excluding terminating newlines) or command (excluding any whitespace) nor more than 0x8000 (non-label, non-blank, non-comment) lines.
@@ -200,28 +204,41 @@ binary_to_ascii_loop:
 	repne scasb
 .endm
 
-.macro RECORD_EFFECT_OF_CHAR character:req output_bit:req effect:req#If the character is or is not found, modify the supplied 'bit' dependent on the selected jump instruction.
+.macro ZERO_ASCII_OUT bit:req, args:vararg#ZERO the output 'bits' using a recursive loop on args (if not blank).
+	movb $'0, \bit
+	.ifnb \args
+		ZERO_ASCII_OUT \args
+	.endif
+.endm
+
+.macro COPY_BYTE source:req, dest:req
+#Modifies: %rax
+	movb \source, %al
+	movb %al, \dest
+.endm
+
+.macro RECORD_EFFECT_OF_CHAR effect:req, character:req, output_bit:req, args:vararg#If the character is or is not found, modify the supplied 'bit' dependent on the selected jump instruction.
 #Accepts: %rbx as start-point (inclusive), %rdx as end-point (exclusive)
 #Modifies: %rax, %rcx, %rdi, %rflags, output
 #Intended "returns": %rflags, %rdi output.
 	FIND_CHAR \character
-	\effect effect_label\@
-	movb $'0, \output_bit
+	\effect effect_label\@#Could add a test here to allow to skip to an arbitrary address (and then jump to that address at the end of the macro, as well), which would cut out redundant jumps and improve speed, but probably with a significant readability cost. Sha'n't do it.
+	ZERO_ASCII_OUT \output_bit \args
 effect_label\@:#\@ is a count of the invokations of the macro, making a unique label.
 .endm
 
-.macro RECORD_PRESENCE_OF_CHAR character:req output_bit:req#If the character is found, the supplied 'bit' is unset.
+.macro RECORD_PRESENCE_OF_CHAR character:req, output_bit:req, args:vararg#If the character is found, the supplied 'bit' is unset.
 #Accepts: %rbx as start-point (inclusive), %rdx as end-point (exclusive)
 #Modifies: %rax, %rcx, %rdi, %rflags, output
 #Intended "returns": %rflags, %rdi output.
-	RECORD_EFFECT_OF_CHAR \character, \output_bit, jne
+	RECORD_EFFECT_OF_CHAR jne, \character, \output_bit, \args
 .endm
 
-.macro RECORD_LACK_OF_CHAR character:req output_bit:req#If the character is NOT found, the supplied 'bit' is unset.
+.macro RECORD_LACK_OF_CHAR character:req, output_bit:req, args:vararg#If the character is NOT found, the supplied 'bit' is unset.
 #Accepts: %rbx as start-point (inclusive), %rdx as end-point (exclusive)
 #Modifies: %rax, %rcx, %rdi, %rflags, output
 #Intended "returns": %rflags, %rdi output.
-	RECORD_EFFECT_OF_CHAR \character, \output_bit, je
+	RECORD_EFFECT_OF_CHAR je, \character, \output_bit, \args
 .endm
 
 c_instr:#Spaghetti code? Must determine which sub-instructions exist based on the presence or absence of = and ; characters. Then generate binary ASCII representation of each sub-instruction, including nulls. Then write to file.
@@ -253,15 +270,6 @@ c_instr:#Spaghetti code? Must determine which sub-instructions exist based on th
 	movb $'1, %al
 	cld#Ensure forward direction (incrementing %rdi) for all reps in this procedure (including those in macroes).
 	rep stosb#Set all the characters in output(%rdi) to '1', using %rcx(counter) and %al(value)
-	movq %r9, %rbx
-	movq %rsi, %rdx
-	FIND_CHAR $'=#First determine whether there are any destinations.
-	je dest
-	movb $'0, A_DEST_BIT#If no '=', then null the destination bits
-	movb $'0, D_DEST_BIT
-	movb $'0, M_DEST_BIT
-	jmp find_jump#No =, so no destinations
-dest:
 #dest:	d1-A:	d2-D:	d3-M:
 #null	0	0	0
 #M	0	0	1
@@ -271,12 +279,18 @@ dest:
 #AM	1	0	1
 #AD	1	1	0
 #ADM	1	1	1
+	movq %r9, %rbx
+	movq %rsi, %rdx
+	RECORD_LACK_OF_CHAR $'=, A_DEST_BIT, D_DEST_BIT, M_DEST_BIT#First determine whether there are any destinations. If no '=', then null the destination bits as there are no destinations.
+	jne find_jump
 	movq %rdi, %r9#Important to NOT search for anything else BEFORE the '=' sign, and better not to include it.
 	decq %rdi#repne in FIND_CHAR increments %rdi beyond end-point.
-	movq %rdi, %rdx#Important to NOT search for destinations AFTER the '=' sign
+	movq %rdi, %rdx#Important to NOT search for destinations AFTER the '=' sign.
 	RECORD_LACK_OF_CHAR $'A, A_DEST_BIT
 	RECORD_LACK_OF_CHAR $'D, D_DEST_BIT
 	RECORD_LACK_OF_CHAR $'M, M_DEST_BIT
+	movq %r9, %rbx#Set so that items before the '=' sign are no-longer searched. Makes no functional difference here, but should speed up later FIND_CHAR for 'J', as rep scasb has complexity 2n according to: http://www.agner.org/optimize/instruction_tables.pdf
+	movq %rsi, %rdx#Now MUST search for destinations after the '=' sign.
 find_jump:#All jumps begin with 'J', so no need to worry about the semi-colon
 #jump:	j1-L:	j2-E:	j3-G:
 #null	0	0	0
@@ -287,27 +301,22 @@ find_jump:#All jumps begin with 'J', so no need to worry about the semi-colon
 #JNE	1	0	1
 #JLE	1	1	0
 #JMP	1	1	1
-	movq %rsi, %rdx#Necessary if there was a destination.
-	FIND_CHAR $'J
-	je jump
-	movb $'0, JL_BIT#If no 'J', then null the jump bits
-	movb $'0, JE_BIT
-	movb $'0, JG_BIT
-	jmp comp#No 'J', so no jump possible
-jump:
+	RECORD_LACK_OF_CHAR $'J, JL_BIT, JE_BIT, JG_BIT#If no 'J', then null the jump bits and skip forward, as no jump is possible.
+	jne comp
 	movq %rdi, %rsi#comp part should not search after 'J'
 	movq %rsi, %rbx#Search only after the 'J' found that indicates a jump
 	subq $2, %rsi#comp part should not search after the ';'.
 	FIND_CHAR $'M
-	je comp#If there IS an 'M' after the 'J', it can only be a 'JMP', so nothing should be done
-	FIND_CHAR $'N
-	jne predicate_jump#If no 'N', then must be some other predicate jump
-	movb $'0, JE_BIT
-	jmp comp#If there IS an 'N' after the 'J', it can only be a 'JNE': no more should be done
+	je comp_if_jump#If there IS an 'M' after the 'J', it can only be a 'JMP', so nothing should be done
+	RECORD_PRESENCE_OF_CHAR $'N, JE_BIT
+	je comp_if_jump#If no 'N', then must be some other predicate jump, if there IS an 'N' after the 'J', it can only be 'JNE', so no more should be done.
 predicate_jump:
 	RECORD_LACK_OF_CHAR $'L, JL_BIT
 	RECORD_LACK_OF_CHAR $'E, JE_BIT
 	RECORD_LACK_OF_CHAR $'G, JG_BIT
+comp_if_jump:
+	movq %r9, %rbx#Reset for comp.
+	movq %rsi, %rdx#Necessary if there was a jump -- see earlier change to %rsi.
 comp:#Almost the entire rest of this procedure deals with the computation/ALU bits.
 #computation:	c1-zx:	c2-nx:	c3-zy:	c4-ny:	c5-f:	c6-no:
 #a=0:*	a=1:*	x=0:	x=!x:	y=0:	y=!y:	**	out=!out
@@ -331,19 +340,11 @@ comp:#Almost the entire rest of this procedure deals with the computation/ALU bi
 #A-D	M-D	0	0	0	1	1	1
 #*a determines whether x is A or M.
 #** f determines whether the output uses x+y (when '1') or x&y (when '0').
-	movq %r9, %rbx#Necessary if there was a destination or jump.
-	movq %rsi, %rdx#Necessary if there was a jump.
-	FIND_CHAR $'0
-	jne no_zero
-	movb $'0, A_BIT
-	movb $'0, NX_BIT
-	movb $'0, NY_BIT
-	movb $'0, NO_BIT
-	jmp write_output#If there is a '0', no more processing should be needed, otherwise invalid
-no_zero:
-	RECORD_LACK_OF_CHAR $'M, A_BIT
-	jne no_M#Hahahaaaa!
-	movb $'0, ZY_BIT#If 'M', then the zy-bit is not set
+	RECORD_PRESENCE_OF_CHAR $'0, A_BIT, NX_BIT, NY_BIT, NO_BIT
+	je write_output#If there is a '0', no more processing should be needed, otherwise invalid
+	RECORD_LACK_OF_CHAR $'M, A_BIT#It seems the reference assembler only sets the a-bit to '1' if 'M' is there, so not for '1', '-1' etc..
+	jne no_M
+	ZERO_ASCII_OUT ZY_BIT#If 'M', then the zy-bit is not set
 	jmp yes_M
 no_M:
 	RECORD_PRESENCE_OF_CHAR $'A, ZY_BIT#Unless either 'A' or 'M' exist, zy-bit is set
@@ -356,70 +357,44 @@ yes_M:
 	jg three_character_comp
 	FIND_CHAR $'1
 	je write_output#For '1', the bits (apart from the a-bit) are all '1'
-	movb ZX_BIT, %al#Already done the '0' case and the '1' case, so this applies to the other two 1-character cases
-	movb %al, NX_BIT
-	movb ZY_BIT, %al
-	movb %al, NY_BIT
-	movb $'0, NO_BIT
-	movb $'0, F_BIT
+	COPY_BYTE ZX_BIT, NX_BIT#Already done the '0' case and the '1' case, so this applies to the other two 1-character cases
+	COPY_BYTE ZY_BIT, NY_BIT#...
+	ZERO_ASCII_OUT NO_BIT, F_BIT
 	jmp write_output#All 1-character cases accounted for.
 two_character_comp:
-	movb ZX_BIT, %al
-	movb %al, NX_BIT#In all 2-character cases, this applies.
-	FIND_CHAR $'1
-	je minus_one
-	movb ZY_BIT, %al
-	movb %al, NY_BIT
-	FIND_CHAR $'-
+	COPY_BYTE ZX_BIT, NX_BIT#In all 2-character cases, this applies.
+	RECORD_PRESENCE_OF_CHAR $'1, NY_BIT, NO_BIT#If '1' and two-characters, must be '-1'.
 	je write_output
-	movb $'0, F_BIT#Affects only the '!$' cases.
-	jmp write_output
-minus_one:
-	movb $'0, NY_BIT
-	movb $'0, NO_BIT
+	COPY_BYTE ZY_BIT, NY_BIT#In all remaining 2-character cases, this applies.
+	RECORD_LACK_OF_CHAR $'-, F_BIT#Affects only the '!$' cases.
 	jmp write_output
 three_character_comp:
+	RECORD_PRESENCE_OF_CHAR $'|, F_BIT
+	je write_output
+	RECORD_PRESENCE_OF_CHAR $'&, NX_BIT, NY_BIT, F_BIT, NO_BIT
+	je write_output
 	FIND_CHAR $'+
 	je add_comp
-	FIND_CHAR $'&
-	je and_comp
-	FIND_CHAR $'|
-	je or_comp
 	FIND_CHAR $'1#Now, only must deal with subtraction, '$-1' is the easiest case.
 	je subtract_one_comp
-	jmp general_subtraction_comp
+	cmpb $'D, (%rbx)
+	je d_initial_subtraction
+	ZERO_ASCII_OUT NX_BIT
+	jmp write_output
+d_initial_subtraction:
+	ZERO_ASCII_OUT NY_BIT
+	jmp write_output
 add_comp:
 	cmpb $'0, ZX_BIT#If '1', then 'D+1', all bits accounted for.
 	jne write_output
 	cmpb $'0, ZY_BIT#If '1', then 'A+1' or 'M+1', all bits accounted for.
 	jne write_output
-	movb $'0, NX_BIT
-	movb $'0, NY_BIT
-	movb $'0, NO_BIT
-	jmp write_output
-and_comp:
-	movb $'0, NX_BIT
-	movb $'0, NY_BIT
-	movb $'0, F_BIT
-	movb $'0, NO_BIT
-	jmp write_output
-or_comp:
-	movb $'0, F_BIT
+	ZERO_ASCII_OUT NX_BIT, NY_BIT, NO_BIT
 	jmp write_output
 subtract_one_comp:
-	movb ZX_BIT, %al
-	movb %al, NX_BIT
-	movb ZY_BIT, %al
-	movb %al, NY_BIT
-	movb $'0, NO_BIT
-	jmp write_output
-general_subtraction_comp:
-	cmpb $'D, (%rbx)
-	je d_initial_subtraction
-	movb $'0, NX_BIT
-	jmp write_output
-d_initial_subtraction:
-	movb $'0, NY_BIT
+	COPY_BYTE ZX_BIT, NX_BIT
+	COPY_BYTE ZY_BIT, NY_BIT
+	ZERO_ASCII_OUT NO_BIT
 write_output:
 	movq  $SYS_WRITE, %rax
 	movq  ST_FD_OUT(%rbp), %rdi

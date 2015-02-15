@@ -18,6 +18,8 @@
 
 #To search for registers in vim, try this (or variants for only some or one register(s)): /%[re]\?[abcd][xlh]\|%[re]\?\([ds]i\|[bs]p\)l\?\|%r\(1[0-5]\|[89]\)[bsl]\?
 
+.altmacro#Gives more syntax, and more power, to macros
+
 #Syscall numbers found in /usr/include/asm/unistd_64.h
 .equiv SYS_READ, 0
 	.equiv STDIN, 0
@@ -39,6 +41,19 @@
 	.equiv PROT_EXEC, 0x4
 .equiv SYS_EXIT, 60
 	.equiv EXIT_SUCCESS, 0#/usr/include/stdlib.h:
+
+.macro MOV_MULT source, destination, args:vararg#This optionally 'movq's values. These values can be skipped, like 'MOV_MULT , <%rax>, $0, <%rbx>, , <%rcx>, $1, <%rdx>' as long as the destinations for non-terminal blank sources/values are not themselves blank. Note also that register, like %r15, should be escaped like so: '<%r15>'.
+	.ifnb \destination
+		.ifnb \source
+			movq \source, \destination
+		.endif
+		MOV_MULT \args
+	.endif
+.endm
+.macro __SYSCALL rax_arg, rdi_arg, rsi_arg, rdx_arg, r10_arg, r8_arg, r9_arg#Syscalls look boring and take up space. This macro shortens syscalls in source code by setting the (optional) registers, if the arguments are defined, and then syscalling. Note that registers passed in, like %r15, should be in the form <<%r15>>, as the '%' needs to be escaped twice.
+	MOV_MULT \rax_arg, <%rax>, \rdi_arg, <%rdi>, \rsi_arg, <%rsi>, \rdx_arg, <%rdx>, \r10_arg, <%r10>, \r8_arg, <%r8>, \r9_arg, <%r9>
+	syscall#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
+.endm
 
 .equiv ST_FD_OUT, -16#Output file descriptor location.
 .equiv ST_FD_IN, -8#Input file descriptor location.
@@ -67,7 +82,6 @@ preset_symbols:#Populate the symbol table initially with these preset symbols:
 	.endm
 
 	#Macro to generate symbols R0-15
-	.altmacro#Gives more syntax, and more power, to macros
 	.macro R_SYMBOLS to:req, from=0#Must have the end-point, assumes, unless told, that start is 0
 		INSERT_SYMBOL R\from, \from#String: R[0-15]
 		.if \to - \from#Unless from==to:
@@ -186,11 +200,7 @@ binary_to_ascii_loop:
 	decw %cx
 	cmpq $(OUTPUT_LENGTH - 2), %rax#output($(OUTPUT_LENGTH - 1)) is '\n'
 	jl binary_to_ascii_loop
-	movq  $SYS_WRITE, %rax
-	movq  ST_FD_OUT(%rbp), %rdi
-	movq  $output, %rsi
-	movq  $OUTPUT_LENGTH, %rdx
-	syscall#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
+	__SYSCALL $SYS_WRITE, ST_FD_OUT(%rbp), $output, $OUTPUT_LENGTH#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
 	ret
 
 .macro FIND_CHAR character:req#Does this count as abuse of the RFLAGS register?
@@ -396,18 +406,14 @@ subtract_one_comp:
 	COPY_BYTE ZY_BIT, NY_BIT
 	ZERO_ASCII_OUT NO_BIT
 write_output:
-	movq  $SYS_WRITE, %rax
-	movq  ST_FD_OUT(%rbp), %rdi
-	movq  $output, %rsi
-	movq  $OUTPUT_LENGTH, %rdx
-	syscall#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
+	__SYSCALL $SYS_WRITE, ST_FD_OUT(%rbp), $output, $OUTPUT_LENGTH#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
 	ret
 
 .globl _start
 _start:
 	movq %rsp, %rbp#Change NOT %rbp hereafter.
-#Copy built-in symbols to stack.
 	subq $-ST_FD_OUT, %rsp#This prevents overlapping with the file-descriptors...
+#Copy built-in symbols to stack.
 	movq %rsp, %r14#%r14 shall contain the start address of the symbol table.
 	subq $(SYMBOL_TABLE_STACK_OFFSET + PRESET_SYMBOLS_LENGTH), %r14
 	movq %rsp, %r13#%r13 shall contain the end adress of the symbol table.
@@ -432,15 +438,9 @@ filename_copy:#Stores filename in preset_symbols area, so there is a limit to th
 	movb $'c,  (preset_symbols + 2)(%rcx)#...
 	movb $'k,  (preset_symbols + 3)(%rcx)#...
 	movb $0,   (preset_symbols + 4)(%rcx)#...
-	movq $PERM_RDWR_UGO, %rdx
-	movq $SYS_OPEN, %rax
-	movq $O_RDONLY, %rsi
-	syscall#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
+	__SYSCALL $SYS_OPEN,                , $O_RDONLY, $PERM_RDWR_UGO#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
 	movq %rax, ST_FD_IN(%rbp)
-	movq $SYS_OPEN, %rax
-	movq $preset_symbols, %rdi#Output filename.
-	movq $O_CREAT_WRONLY_TRUNC, %rsi
-	syscall#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
+	__SYSCALL $SYS_OPEN, $preset_symbols, $O_CREAT_WRONLY_TRUNC#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
 	movq %rax, ST_FD_OUT(%rbp)
 	
 read_loop_init:
@@ -448,16 +448,9 @@ read_loop_init:
 	xorq %r12, %r12#Clear for use as line count for labels in 1st loop, variable count in 2nd.
 read_loop_begin:#Read every line in the input file and process differently depending on the content.
 #NOTE: Within this loop is the only safe place to modify %r8.
-	movq $SYS_LSEEK, %rax
-	movq ST_FD_IN(%rbp), %rdi
-	movq %r15, %rsi
-	movq $SEEK_SET, %rdx
-	syscall#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
-	movq  $SYS_READ, %rax
-	movq  ST_FD_IN(%rbp), %rdi
-	movq  $INPUT_BUFFER, %rsi
-	movq  $INPUT_BUFFER_SIZE, %rdx
-	syscall#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
+	#Note that the '<<' and '>>' are necessary for escaping the '%' for a naked register TWICE in the __SYSCALL macro.
+	__SYSCALL $SYS_LSEEK, ST_FD_IN(%rbp), <<%r15>>, $SEEK_SET#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
+	__SYSCALL $SYS_READ, ST_FD_IN(%rbp), $INPUT_BUFFER, $INPUT_BUFFER_SIZE#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
 	cmpq $0, %rax
 	jle   end_read_loop
 
@@ -499,8 +492,9 @@ find_non_command:#Determine the point at which the command 'ends' and store it i
 	jge end_read_loop#Maximum line-size is $INPUT_BUFFER_SIZE. The symbol table could not handle more, and any instruction that did not use symbols could not (correctly) use anywhere near this much.
 	CMP_JE pass_decision, INPUT_BUFFER(%r8), $'/, $'\n, $'\r, $'\t, $32#32=SPACE; stop at the beginning of a comment or at the first whitespace. Is OK as correct comments have two '/'s.
 	jmp find_non_command
+
 pass_decision:
-	jmp first_pass_loop#This is modified. <<<<<<<<<<<----
+	jmp first_pass_loop#This is modified. <<<<<<<<<<<----||||||
 
 second_pass_loop:
 	CMP_JE find_command, INPUT_BUFFER, $'(#Ignore labels after first pass
@@ -520,16 +514,10 @@ first_pass_loop:#Add all labels in the Hack assembly file to the symbol table.
 	jmp find_command
 
 end_read_loop:
-	jmp end_first_loop#This is modified. <<<<<<<<<<<----
-	movq $SYS_CLOSE, %rax
-	movq ST_FD_OUT(%rbp), %rdi
-	syscall#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
-	movq $SYS_CLOSE, %rax
-	movq ST_FD_IN(%rbp), %rdi
-	syscall#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
-	movq $SYS_EXIT, %rax
-	movq $EXIT_SUCCESS, %rdi
-	syscall#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
+	jmp end_first_loop#This is modified. <<<<<<<<<<<----||||||
+	__SYSCALL $SYS_CLOSE, ST_FD_OUT(%rbp)#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
+	__SYSCALL $SYS_CLOSE, ST_FD_IN(%rbp)#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
+	__SYSCALL $SYS_EXIT, $EXIT_SUCCESS#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
 
 end_first_loop:#Self-modifying code that depends on the page size being 4096 (0x1000) bytes.
 #Unfortunately, no easy way (seemingly) to operate on the label values at assembling time.
@@ -543,15 +531,12 @@ end_first_loop:#Self-modifying code that depends on the page size being 4096 (0x
 #Or is it?
 	.equiv page_size, 0x1000#Would be better to determine page size at runtime.
 	.equiv page_rounder, ~(page_size - 1)#For page_size of 0x1000, 0xfffffffffffff000
-	movq $SYS_MPROTECT, %rax
-	movq $0x1000, %rsi
-	movq $(PROT_READ|PROT_WRITE|PROT_EXEC), %rdx
 	movq $pass_decision, %rdi
-	andq $page_rounder, %rdi#Round to page boundary.
-	syscall#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
+	andq $page_rounder, %rdi#Round to page boundary. Should be 0x400000.
+	__SYSCALL $SYS_MPROTECT, , $0x1000, $(PROT_READ|PROT_WRITE|PROT_EXEC)#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
 	movw $0x9090, pass_decision#Replace jump to this position with two NOPs. Should be 8-bit relative jump like: eb 2c. Changed to: 90 90
 	movq $end_read_loop, %rdi#Again, just in case this is on a different page.
-	andq $page_rounder, %rdi#Round to page boundary.
-	syscall#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
+	andq $page_rounder, %rdi#Round to page boundary. Should be 0x400000.
+	__SYSCALL $SYS_MPROTECT#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
 	movw $0x9090, end_read_loop#Replace jump to this position with two NOPs. Should be 8-bit relative jump like: eb 2a. Changed to: 90 90
 	jmp read_loop_init

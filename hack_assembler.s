@@ -461,25 +461,22 @@ read_loop_begin:#Read every line in the input file and process differently depen
 	cmpq $0, %rax
 	jle   end_read_loop
 
-	.macro CMP_JE character:req, address:req, label:req
+	.macro CMP_JE label:req, address:req, character:req, args:vararg
 		cmpb \character, \address
 		je \label
-	.endm
-	.macro SKIP_WHITESPACE address:req, label:req
-		CMP_JE $'\n, address, label
-		CMP_JE $'\r, address, label#Damn line-ending incompatibilities!
-		CMP_JE $'\t, address, label
-		CMP_JE $32, address, label#SPACE
+		.ifnb \args
+			CMP_JE \label \address, \args
+		.endif
 	.endm
 	movq $-1, %r8#Integer underflow.
 find_command:#Skip through whitespace and stop at first non-whitespace character, then reset outer loop and then, finally, allow processing of commands or comments:
 	incq %r8
 	cmpq $INPUT_BUFFER_SIZE, %r8
 	jge continue_read_loop#Maximum line-size is $INPUT_BUFFER_SIZE
-	SKIP_WHITESPACE INPUT_BUFFER(%r8), find_command
+	CMP_JE find_command, INPUT_BUFFER(%r8), $'\n, $'\r, $'\t, $32#32=SPACE; skip all whitespace.
 	cmpq $0, %r8#This preserves the $INPUT_BUFFER_SIZE-character-per-line maximum.
 	jne continue_read_loop#...
-	CMP_JE $'/, INPUT_BUFFER(%r8), comment_line#Is it ever possible to have a non-comment line that starts with '/'?
+	CMP_JE comment_line, INPUT_BUFFER(%r8), $'/#Is it ever possible to have a non-comment line that starts with '/'?
 	jmp command_line
 continue_read_loop:
 	addq %r8, %r15
@@ -491,8 +488,7 @@ find_newline:#Find end of the comment line and then return to skipping through w
 	incq %r8
 	cmpq $INPUT_BUFFER_SIZE, %r8
 	jge end_read_loop#Handling longer comments without confusing the contents for commands would add complication.
-	CMP_JE $'\n, INPUT_BUFFER(%r8), find_command
-	CMP_JE $'\r, INPUT_BUFFER(%r8), find_command#Damn line-ending incompatibilities!
+	CMP_JE find_command, INPUT_BUFFER(%r8), $'\n, $'\r#Should account for newlines in GNU/Linux (\n, LF), OSX (\r, CR) and Windows (\r\n, CRLF).
 	jmp find_newline
 
 command_line:
@@ -500,16 +496,15 @@ command_line:
 find_non_command:#Determine the point at which the command 'ends' and store it in %r8 so that it is passed to a_instr, c_instr or label_symbols. Also add it to %r15 so that the next command read is 'pure'.
 	incq %r8
 	cmpq $INPUT_BUFFER_SIZE, %r8
-	jge end_read_loop#Maximum line-size is $INPUT_BUFFER_SIZE
-	SKIP_WHITESPACE INPUT_BUFFER(%r8), pass_decision
-	CMP_JE $'/, INPUT_BUFFER(%r8), pass_decision#Is it ever possible to have a non-comment line that starts with '/'?
+	jge end_read_loop#Maximum line-size is $INPUT_BUFFER_SIZE. The symbol table could not handle more, and any instruction that did not use symbols could not (correctly) use anywhere near this much.
+	CMP_JE pass_decision, INPUT_BUFFER(%r8), $'/, $'\n, $'\r, $'\t, $32#32=SPACE; stop at the beginning of a comment or at the first whitespace. Is OK as correct comments have two '/'s.
 	jmp find_non_command
 pass_decision:
 	jmp first_pass_loop#This is modified. <<<<<<<<<<<----
 
 second_pass_loop:
-	CMP_JE $'(, INPUT_BUFFER, find_command#Ignore labels after first pass
-	CMP_JE $'@, INPUT_BUFFER, call_a_instr
+	CMP_JE find_command, INPUT_BUFFER, $'(#Ignore labels after first pass
+	CMP_JE call_a_instr, INPUT_BUFFER, $'@
 	call c_instr#At this point, everything else should be a c-instruction, assuming correct input (as nand2tetris suggests).
 	jmp find_command
 call_a_instr:

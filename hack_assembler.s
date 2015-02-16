@@ -18,8 +18,6 @@
 
 #To search for registers in vim, try this (or variants for only some or one register(s)): /%[re]\?[abcd][xlh]\|%[re]\?\([ds]i\|[bs]p\)l\?\|%r\(1[0-5]\|[89]\)[bsl]\?
 
-.altmacro#Gives more syntax, and more power, to macros
-
 #Syscall numbers found in /usr/include/asm/unistd_64.h
 .equiv SYS_READ, 0
 	.equiv STDIN, 0
@@ -42,7 +40,7 @@
 .equiv SYS_EXIT, 60
 	.equiv EXIT_SUCCESS, 0#/usr/include/stdlib.h:
 
-.macro MOV_MULT source, destination, args:vararg#This optionally 'movq's values. These values can be skipped, like 'MOV_MULT , <%rax>, $0, <%rbx>, , <%rcx>, $1, <%rdx>' as long as the destinations for non-terminal blank sources/values are not themselves blank. Note also that register, like %r15, should be escaped like so: '<%r15>'.
+.macro MOV_MULT source, destination, args:vararg#This optionally 'movq's values. These values can be skipped, like 'MOV_MULT , %rax, $0, %rbx, , %rcx, $1, %rdx' as long as the destinations for non-terminal blank sources/values are not themselves blank.
 	.ifnb \destination
 		.ifnb \source
 			movq \source, \destination
@@ -50,8 +48,8 @@
 		MOV_MULT \args
 	.endif
 .endm
-.macro __SYSCALL rax_arg, rdi_arg, rsi_arg, rdx_arg, r10_arg, r8_arg, r9_arg#Syscalls look boring and take up space. This macro shortens syscalls in source code by setting the (optional) registers, if the arguments are defined, and then syscalling. Note that registers passed in, like %r15, should be in the form <<%r15>>, as the '%' needs to be escaped twice.
-	MOV_MULT \rax_arg, <%rax>, \rdi_arg, <%rdi>, \rsi_arg, <%rsi>, \rdx_arg, <%rdx>, \r10_arg, <%r10>, \r8_arg, <%r8>, \r9_arg, <%r9>
+.macro __SYSCALL rax_arg, rdi_arg, rsi_arg, rdx_arg, r10_arg, r8_arg, r9_arg#Syscalls look boring and take up space. This macro shortens syscalls in source code by setting the (optional) registers, if the arguments are defined, and then syscalling.
+	MOV_MULT \rax_arg, %rax, \rdi_arg, %rdi, \rsi_arg, %rsi, \rdx_arg, %rdx, \r10_arg, %r10, \r8_arg, %r8, \r9_arg, %r9
 	syscall#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
 .endm
 
@@ -81,15 +79,9 @@ preset_symbols:#Populate the symbol table initially with these preset symbols:
 		.short \value
 	.endm
 
-	#Macro to generate symbols R0-15
-	.macro R_SYMBOLS to:req, from=0#Must have the end-point, assumes, unless told, that start is 0
-		INSERT_SYMBOL R\from, \from#String: R[0-15]
-		.if \to - \from#Unless from==to:
-			R_SYMBOLS \to, %(\from + 1)#The "(\from+1)" syntax (from the GAS info pages ".macro") does not work, but this does. % is from GAS info: ".altmacro".
-		.endif
-	.endm
-
-	R_SYMBOLS 15
+	.irp count, 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+	INSERT_SYMBOL R\count, \count
+	.endr
 	INSERT_SYMBOL SP, 0
 	INSERT_SYMBOL LCL, 1
 	INSERT_SYMBOL ARG, 2
@@ -448,17 +440,16 @@ read_loop_init:
 	xorq %r12, %r12#Clear for use as line count for labels in 1st loop, variable count in 2nd.
 read_loop_begin:#Read every line in the input file and process differently depending on the content.
 #NOTE: Within this loop is the only safe place to modify %r8.
-	#Note that the '<<' and '>>' are necessary for escaping the '%' for a naked register TWICE in the __SYSCALL macro.
-	__SYSCALL $SYS_LSEEK, ST_FD_IN(%rbp), <<%r15>>, $SEEK_SET#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
+	__SYSCALL $SYS_LSEEK, ST_FD_IN(%rbp), %r15, $SEEK_SET#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
 	__SYSCALL $SYS_READ, ST_FD_IN(%rbp), $INPUT_BUFFER, $INPUT_BUFFER_SIZE#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
 	cmpq $0, %rax
 	jle   end_read_loop
 
-	.macro CMP_JE label:req, address:req, character:req, args:vararg
-		cmpb \character, \address
+	.macro CMP_JE label:req, input_value:req, character:req, args:vararg
+		cmpb \character, \input_value
 		je \label
 		.ifnb \args
-			CMP_JE \label \address, \args
+			CMP_JE \label \input_value, \args
 		.endif
 	.endm
 	movq $-1, %r8#Integer underflow.
@@ -466,10 +457,11 @@ find_command:#Skip through whitespace and stop at first non-whitespace character
 	incq %r8
 	cmpq $INPUT_BUFFER_SIZE, %r8
 	jge continue_read_loop#Maximum line-size is $INPUT_BUFFER_SIZE
-	CMP_JE find_command, INPUT_BUFFER(%r8), $'\n, $'\r, $'\t, $32#32=SPACE; skip all whitespace.
+	movb INPUT_BUFFER(%r8), %al
+	CMP_JE find_command, %al, $'\n, $'\r, $'\t, $32#32=SPACE; skip all whitespace.
 	cmpq $0, %r8#This preserves the $INPUT_BUFFER_SIZE-character-per-line maximum.
 	jne continue_read_loop#...
-	CMP_JE comment_line, INPUT_BUFFER(%r8), $'/#Is it ever possible to have a non-comment line that starts with '/'?
+	CMP_JE comment_line, %al, $'/#Is it ever possible to have a non-comment line that starts with '/'?
 	jmp command_line
 continue_read_loop:
 	addq %r8, %r15
@@ -490,15 +482,16 @@ find_non_command:#Determine the point at which the command 'ends' and store it i
 	incq %r8
 	cmpq $INPUT_BUFFER_SIZE, %r8
 	jge end_read_loop#Maximum line-size is $INPUT_BUFFER_SIZE. The symbol table could not handle more, and any instruction that did not use symbols could not (correctly) use anywhere near this much.
-	CMP_JE pass_decision, INPUT_BUFFER(%r8), $'/, $'\n, $'\r, $'\t, $32#32=SPACE; stop at the beginning of a comment or at the first whitespace. Is OK as correct comments have two '/'s.
+	movb INPUT_BUFFER(%r8), %al
+	CMP_JE pass_decision, %al, $'/, $'\n, $'\r, $'\t, $32#32=SPACE; stop at the beginning of a comment or at the first whitespace. Is OK as correct comments have two '/'s.
 	jmp find_non_command
 
 pass_decision:
 	jmp first_pass_loop#This is modified. <<<<<<<<<<<----||||||
 
 second_pass_loop:
+	CMP_JE call_a_instr, INPUT_BUFFER, $'@#Expect more of these than labels, so it should be marginally faster to test for these first.
 	CMP_JE find_command, INPUT_BUFFER, $'(#Ignore labels after first pass
-	CMP_JE call_a_instr, INPUT_BUFFER, $'@
 	call c_instr#At this point, everything else should be a c-instruction, assuming correct input (as nand2tetris suggests).
 	jmp find_command
 call_a_instr:

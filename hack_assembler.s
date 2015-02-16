@@ -312,7 +312,6 @@ find_jump:#All jumps begin with 'J', so no need to worry about the semi-colon
 	je comp_if_jump#If there IS an 'M' after the 'J', it can only be a 'JMP', so nothing should be done
 	RECORD_PRESENCE_OF_CHAR $'N, JE_BIT
 	je comp_if_jump#If no 'N', then must be some other predicate jump, if there IS an 'N' after the 'J', it can only be 'JNE', so no more should be done.
-predicate_jump:
 	RECORD_LACK_OF_CHAR $'L, JL_BIT
 	RECORD_LACK_OF_CHAR $'E, JE_BIT
 	RECORD_LACK_OF_CHAR $'G, JG_BIT
@@ -513,7 +512,7 @@ end_read_loop:
 	__SYSCALL $SYS_EXIT, $EXIT_SUCCESS#number: rax, return: rax, args: rdi, rsi, rdx, r10, r8, r9, destroys: rcx, r10, r11
 
 end_first_loop:#Self-modifying code that depends on the page size being 4096 (0x1000) bytes.
-#Unfortunately, no easy way (seemingly) to operate on the label values at assembling time.
+#Unfortunately, no easy way (seemingly) to operate on the label values at assembling time. That is, to perform rounding at assembly-time.
 #From the GNU as info document:
 #"Infix operators" take two arguments, one on either side.  Operators
 #have precedence, but operations with equal precedence are performed left

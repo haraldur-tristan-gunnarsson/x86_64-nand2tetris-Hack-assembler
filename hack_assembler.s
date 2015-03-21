@@ -457,7 +457,8 @@ find_command:#Skip through whitespace and stop at first non-whitespace character
 	cmpq $INPUT_BUFFER_SIZE, %r8
 	jge continue_read_loop#Maximum line-size is $INPUT_BUFFER_SIZE
 	movb INPUT_BUFFER(%r8), %al
-	CMP_JE find_command, %al, $'\n, $'\r, $'\t, $32#32=SPACE; skip all whitespace.
+	cmpb $' ', %al#See the ASCII table -- all below 0x20 (SPACE) are also whitespace...
+	jbe find_command#... or otherwise not printed.
 	cmpq $0, %r8#This preserves the $INPUT_BUFFER_SIZE-character-per-line maximum.
 	jne continue_read_loop#...
 	CMP_JE comment_line, %al, $'/#Is it ever possible to have a non-comment line that starts with '/'?
@@ -482,7 +483,9 @@ find_non_command:#Determine the point at which the command 'ends' and store it i
 	cmpq $INPUT_BUFFER_SIZE, %r8
 	jge end_read_loop#Maximum line-size is $INPUT_BUFFER_SIZE. The symbol table could not handle more, and any instruction that did not use symbols could not (correctly) use anywhere near this much.
 	movb INPUT_BUFFER(%r8), %al
-	CMP_JE pass_decision, %al, $'/, $'\n, $'\r, $'\t, $32#32=SPACE; stop at the beginning of a comment or at the first whitespace. Is OK as correct comments have two '/'s.
+	cmpb $' ', %al#See the ASCII table -- all below 0x20 (SPACE) are also whitespace...
+	jbe pass_decision#... or otherwise not printed.
+	CMP_JE pass_decision, %al, $'/#stop at the beginning of a comment. Is OK as correct comments have two '/'s.
 	jmp find_non_command
 
 pass_decision:

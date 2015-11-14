@@ -101,6 +101,15 @@ preset_symbols:#Populate the symbol table initially with these preset symbols:
 #^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 #^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+label_symbols:
+#Call this on a line of the form (<something>), then it shall add a label symbol to the symbol table with the value as the number of non-label, non-comment, non-whitespace lines of code in the source file.
+#Accepts: %r8 representing line length, %r14 representing the start of the symbol table, %r12 is the number of (non-label) lines read
+#Modifies: %r14, %rax, %rcx, %rdx, %rsi, %rdi
+#Intended "returns": %r14.
+	leaq -2(%r8), %rax#'Remove' parentheses around label.
+	movq $(INPUT_BUFFER + 1), %rsi#Start from after the first '('.
+	movq %r12, %rdx
+#		********FALLTHROUGH********
 add_symbol:
 #Adds a new symbol to the symbol table and updates the %r14 register with the new address of the start of the symbol table.
 #Accepts: %rax representing symbol string length, %r14 representing the start of the symbol table, %rdx is the value of the symbol, %rsi is the address to read the symbol from
@@ -116,17 +125,6 @@ add_symbol:
 	cld#Ensure forward direction (incrementing %rsi and %rdi)
 	rep movsb#Uses %rsi passed into this procedure.
 	ret#I wonder, does register renaming on modern CPUs extend to return addresses on the stack?
-
-label_symbols:
-#Call this on a line of the form (<something>), then it shall add a label symbol to the symbol table with the value as the number of non-label, non-comment, non-whitespace lines of code in the source file.
-#Accepts: %r8 representing line length, %r14 representing the start of the symbol table, %r12 is the number of (non-label) lines read
-#Modifies: %r14, %rax, %rcx, %rdx, %rsi, %rdi
-#Intended "returns": %r14.
-	leaq -2(%r8), %rax#'Remove' parentheses around label.
-	movq $(INPUT_BUFFER + 1), %rsi#Start from after the first '('.
-	movq %r12, %rdx
-	call add_symbol
-	ret
 
 a_instr:#Converts number after @ from an ASCII string to a binary number (or converts a non-number after to a binary number by finding the matching string in the symbol table and getting the symbol value), and then into an ASCII representation of that binary number! Then writes it to the file.
 #Accepts: %r8 representing line length, ST_FD_OUT(%rbp) is the file descriptor, %r14 is the start of the symbol table, %r13 is the end of the symbol table, %r12 is the number of currently existing variable symbols

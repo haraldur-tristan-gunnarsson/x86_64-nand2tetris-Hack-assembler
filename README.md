@@ -8,3 +8,5 @@ as hack_assembler.s -o hack_assembler.o && ld -m elf_x86_64 hack_assembler.o -o 
 ```
 
 The creators of the nand2tetris course have requested that answers for the assignments (like this one) not be released to the public. In my defence, anyone having trouble writing the assembler in a higher-level language would likely find the x86_64 assembly harder to work out than the assignment itself (I did; I used the assignment as an excuse to teach myself some x86_64 assembly). Also, I suspect that anyone familiar with x86_64 assembly (especially in GAS/GNU/AT&amp;T syntax) would not need, nor seek out, any help.
+
+For now (and in case anyone cares), this code is licensed under the **Affero General Public Licence version 3 or later (AGPL-3.0+)**.
